@@ -232,7 +232,7 @@ class ConfigManager:
             },
             'llm': {
                 'provider': 'openai',
-                'model_name': 'gpt-5.1',
+                'model_name': 'MiniMax-M2.5',
                 'api_key': os.getenv('OPENAI_API_KEY', ''),
                 'base_url': os.getenv('OPENAI_BASE_URL', 'https://openai.api2d.net/v1'),
                 'temperature': 0.7,
