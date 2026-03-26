@@ -41,28 +41,43 @@ def search_xhs(keyword: str, max_results: int = 10) -> list:
         
         # 解析 JSON 输出
         output = result.stdout.strip()
-        # 找到最后一个 JSON 对象
-        json_start = output.rfind('{')
-        if json_start >= 0:
-            output = output[json_start:]
         
-        data = json.loads(output)
+        # 尝试直接解析为 JSON 对象
+        try:
+            data = json.loads(output)
+        except json.JSONDecodeError:
+            # 如果失败，尝试提取最后一个 JSON 对象
+            json_start = output.rfind('{')
+            json_end = output.rfind('}')
+            if json_start >= 0 and json_end > json_start:
+                output = output[json_start:json_end+1]
+                data = json.loads(output)
+            else:
+                raise
         
-        if data.get('success') and 'feeds' in data:
-            feeds = data['feeds'][:max_results]
-            print(f"   ✅ 获取 {len(feeds)} 条笔记")
-            return feeds
+        # 处理不同的输出格式
+        if isinstance(data, dict):
+            if 'feeds' in data:
+                feeds = data['feeds'][:max_results]
+            elif 'success' in data and data.get('success') and 'feeds' in data:
+                feeds = data['feeds'][:max_results]
+            else:
+                print(f"   ❌ 未知格式：{list(data.keys())}")
+                return []
+        elif isinstance(data, list):
+            feeds = data[:max_results]
         else:
-            error = data.get('error', '未知错误')
-            print(f"   ❌ 错误：{error}")
+            print(f"   ❌ 未知数据类型：{type(data)}")
             return []
+        
+        print(f"   ✅ 获取 {len(feeds)} 条笔记")
+        return feeds
             
     except subprocess.TimeoutExpired:
         print("   ❌ 超时（60 秒）")
         return []
     except json.JSONDecodeError as e:
         print(f"   ❌ JSON 解析错误：{e}")
-        print(f"   输出：{output[:200]}")
         return []
     except Exception as e:
         print(f"   ❌ 错误：{e}")
@@ -101,11 +116,11 @@ async def validate_business_idea(business_idea: str, fast_mode: bool = True):
     print("📊 步骤 2: AI 分析笔记内容...")
     
     notes_text = "\n\n".join([
-        f"标题：{feed.get('note_card', {}).get('title', 'N/A')}\n"
-        f"内容：{feed.get('note_card', {}).get('desc', 'N/A')}\n"
-        f"点赞：{feed.get('note_card', {}).get('interact_info', {}).get('liked_count', 0)}\n"
-        f"收藏：{feed.get('note_card', {}).get('interact_info', {}).get('collected_count', 0)}\n"
-        f"评论：{feed.get('note_card', {}).get('interact_info', {}).get('comment_count', 0)}"
+        f"标题：{feed.get('displayTitle', feed.get('note_card', {}).get('title', 'N/A'))}\n"
+        f"作者：{feed.get('user', {}).get('nickname', 'N/A')}\n"
+        f"点赞：{feed.get('interactInfo', feed.get('note_card', {}).get('interact_info', {})).get('likedCount', feed.get('interactInfo', feed.get('note_card', {}).get('interact_info', {})).get('liked_count', 0))}\n"
+        f"收藏：{feed.get('interactInfo', feed.get('note_card', {}).get('interact_info', {})).get('collectedCount', feed.get('interactInfo', feed.get('note_card', {}).get('interact_info', {})).get('collected_count', 0))}\n"
+        f"评论：{feed.get('interactInfo', feed.get('note_card', {}).get('interact_info', {})).get('commentCount', feed.get('interactInfo', feed.get('note_card', {}).get('interact_info', {})).get('comment_count', 0))}"
         for feed in feeds
     ])
     
@@ -145,10 +160,18 @@ async def validate_business_idea(business_idea: str, fast_mode: bool = True):
     report_file = report_dir / f"{safe_name}_{timestamp}_xhs.md"
     
     # 计算互动数据
+    def get_count(feed, key):
+        interact = feed.get('interactInfo', {}) or feed.get('note_card', {}).get('interact_info', {})
+        val = interact.get(key, interact.get(key.lower(), 0))
+        try:
+            return int(val or 0)
+        except:
+            return 0
+    
     total_engagement = sum(
-        feed.get('note_card', {}).get('interact_info', {}).get('liked_count', 0) + 
-        feed.get('note_card', {}).get('interact_info', {}).get('collected_count', 0) * 2 + 
-        feed.get('note_card', {}).get('interact_info', {}).get('comment_count', 0)
+        get_count(feed, 'likedCount') + 
+        get_count(feed, 'collectedCount') * 2 + 
+        get_count(feed, 'commentCount')
         for feed in feeds
     )
     avg_engagement = total_engagement / len(feeds) if feeds else 0
@@ -181,20 +204,18 @@ async def validate_business_idea(business_idea: str, fast_mode: bool = True):
     
     sorted_feeds = sorted(
         feeds,
-        key=lambda x: x.get('note_card', {}).get('interact_info', {}).get('liked_count', 0),
+        key=lambda x: get_count(x, 'likedCount'),
         reverse=True
     )[:5]
     
     for i, feed in enumerate(sorted_feeds, 1):
-        note_card = feed.get('note_card', {})
-        interact_info = note_card.get('interact_info', {})
-        user_info = note_card.get('user', {})
+        interact = feed.get('interactInfo', {}) or feed.get('note_card', {}).get('interact_info', {})
         
         report_content += f"""
 ### TOP {i}
-- **标题**: {note_card.get('title', note_card.get('desc', 'N/A')[:50])}
-- **互动**: 点赞{interact_info.get('liked_count', 0)} | 收藏{interact_info.get('collected_count', 0)} | 评论{interact_info.get('comment_count', 0)}
-- **作者**: {user_info.get('nickname', 'N/A')}
+- **标题**: {feed.get('displayTitle', feed.get('note_card', {}).get('title', 'N/A')[:50])}
+- **互动**: 点赞{get_count(feed, 'likedCount')} | 收藏{get_count(feed, 'collectedCount')} | 评论{get_count(feed, 'commentCount')}
+- **作者**: {feed.get('user', {}).get('nickname', feed.get('note_card', {}).get('user', {}).get('nickname', 'N/A'))}
 """
     
     with open(report_file, 'w', encoding='utf-8') as f:
